@@ -1,209 +1,211 @@
+from fastapi import FastAPI, Depends, Request, Query
+from fastapi.exceptions import RequestValidationError
+from sqlalchemy.orm import Session
 
+from database import get_db
+from schema import create_response, TaskCreate, TaskUpdate, TaskResponse
+import task_service
 
-class DeliveryOrder:
-    def __init__(
-        self,
-        order_id,
-        customer_name,
-        delivery_address,
-        distance_km,
-        cost_per_km,
-        package_weight,
-        extra_fee,
-    ):
-        self.id = order_id
-        self.customer_name = customer_name
-        self.delivery_address = delivery_address
-        self.distance_km = distance_km
-        self.cost_per_km = cost_per_km
-        self.package_weight = package_weight
-        self.extra_fee = extra_fee
-        self.total_delivery_fee = 0
-        self.delivery_type = ""
-        self.calculate_delivery_fee()
-        self.classify_delivery()
-    def calculate_delivery_fee(self):
-        self.total_delivery_fee = self.distance_km * self.cost_per_km + self.extra_fee
+app = FastAPI(
+    title="Task Management API",
+    description="Hệ thống quản lý công việc trong dự án",
+    version="1.0.0"
+)
 
-    def classify_delivery(self):
-        if self.total_delivery_fee < 50_000:
-            self.delivery_type = "Gần"
-        elif self.total_delivery_fee < 150_000:
-            self.delivery_type = "Trung bình"
-        elif self.total_delivery_fee < 500_000:
-            self.delivery_type = "Xa"
-        else:
-            self.delivery_type = "Rất xa"
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for err in exc.errors():
+        loc = " -> ".join(str(x) for x in err.get("loc", []))
+        msg = err.get("msg", "Lỗi không xác định")
+        errors.append(f"[{loc}]: {msg}")
+    error_msg = "; ".join(errors)
+    
+    return create_response(
+        status_code=422,
+        message="Dữ liệu đầu vào không hợp lệ",
+        data=None,
+        error=error_msg,
+    )
 
-    def update_information(
-        self, distance_km, cost_per_km, package_weight, extra_fee
-    ):
-        self.distance_km = distance_km
-        self.cost_per_km = cost_per_km
-        self.package_weight = package_weight
-        self.extra_fee = extra_fee
-        self.calculate_delivery_fee()
-        self.classify_delivery()
-        
-        
-        
+@app.get("/")
+def check_server(request: Request):
+    return create_response(
+        status_code=200,
+        message="API đang chạy",
+        data=None,
+        error=None,
+        path=request.url.path
+    )
 
-class DeliveryOrderManager:
-    def __init__(self):
-        self.orders = []
-    def find_by_id(self, order_id):
-        order_id = order_id.strip().lower()
-        for order in self.orders:
-            if order.id.lower() == order_id:
-                return order
-        return None
-
-    def add_order(self):
-        order_id = input_non_empty("Nhập mã đơn giao hàng: ")
-        if self.find_by_id(order_id):
-            print("Mã đơn giao hàng đã tồn tại!")
-            return
-        customer_name = input_non_empty("Nhập tên khách hàng: ")
-        delivery_address = input_non_empty("Nhập địa chỉ giao hàng: ")
-        distance_km = input_number(
-            "Nhập khoảng cách giao hàng (km): ", allow_zero=False
+# API 2: Lấy danh sách công việc
+@app.get("/tasks")
+def get_tasks(request: Request, db: Session = Depends(get_db)):
+    try:
+        tasks = task_service.get_all_tasks(db)
+        # Chuyển đổi danh sách ORM model sang dict để serialize
+        data_list = [TaskResponse.model_validate(t).model_dump() for t in tasks]
+    except Exception as exc:
+        db.rollback()
+        return create_response(
+            status_code=500,
+            message="Lỗi hệ thống khi lấy danh sách công việc",
+            data=None,
+            error=str(exc),
+            path=request.url.path
         )
-        cost_per_km = input_number("Nhập đơn giá/km: ")
-        package_weight = input_number(
-            "Nhập khối lượng kiện hàng (kg): ", allow_zero=False
+    else:
+        return create_response(
+            status_code=200,
+            message="Lấy danh sách công việc thành công",
+            data=data_list,
+            error=None,
+            path=request.url.path
         )
-        extra_fee = input_number("Nhập phụ phí: ")
-        order = DeliveryOrder(
-            order_id,
-            customer_name,
-            delivery_address,
-            distance_km,
-            cost_per_km,
-            package_weight,
-            extra_fee,
-        )
-        self.orders.append(order)
-        print("Thêm đơn giao hàng thành công!")
 
-    def show_all(self, orders=None):
-        displayed_orders = self.orders if orders is None else orders
-        if not displayed_orders:
-            print("Danh sách đơn giao hàng đang rỗng!")
-            return
-        print(
-            f"{'Mã đơn':<10}{'Khách hàng':<20}{'Địa chỉ':<20}"
-            f"{'Km':<8}{'Đơn giá':<12}{'Khối lượng':<12}"
-            f"{'Phụ phí':<12}{'Tổng phí':<15}{'Phân loại':<12}"
+# API 3: Tìm kiếm công việc theo trạng thái
+@app.get("/tasks/search")
+def search_tasks(
+    request: Request, 
+    status: str = Query(..., description="Từ khóa trạng thái cần tìm kiếm gần đúng"), 
+    db: Session = Depends(get_db)
+):
+    try:
+        tasks = task_service.search_tasks_by_status(db, status)
+        data_list = [TaskResponse.model_validate(t).model_dump() for t in tasks]
+    except Exception as exc:
+        db.rollback()
+        return create_response(
+            status_code=500,
+            message="Lỗi hệ thống khi tìm kiếm công việc",
+            data=None,
+            error=str(exc),
+            path=request.url.path
         )
-        print("-" * 121)
-        for order in displayed_orders:
-            print(
-                f"{order.id:<10}{order.customer_name:<20}"
-                f"{order.delivery_address:<20}{order.distance_km:<8g}"
-                f"{order.cost_per_km:<12,.0f}{order.package_weight:<12g}"
-                f"{order.extra_fee:<12,.0f}{order.total_delivery_fee:<15,.0f}"
-                f"{order.delivery_type:<12}"
+    else:
+        return create_response(
+            status_code=200,
+            message="Tìm kiếm công việc thành công",
+            data=data_list,
+            error=None,
+            path=request.url.path
+        )
+
+# API 4: Lấy chi tiết công việc
+@app.get("/tasks/{task_id}")
+def get_task_detail(request: Request, task_id: int, db: Session = Depends(get_db)):
+    try:
+        task = task_service.get_task_by_id(db, task_id)
+    except Exception as exc:
+        db.rollback()
+        return create_response(
+            status_code=500,
+            message="Lỗi hệ thống khi lấy chi tiết công việc",
+            data=None,
+            error=str(exc),
+            path=request.url.path
+        )
+    else:
+        if not task:
+            return create_response(
+                status_code=404,
+                message="Không tìm thấy công việc",
+                data=None,
+                error="Not Found",
+                path=request.url.path
             )
-
-    def update_order(self):
-        order_id = input_non_empty("Nhập mã đơn giao hàng cần cập nhật: ")
-        order = self.find_by_id(order_id)
-        if order is None:
-            print("Không tìm thấy đơn giao hàng cần cập nhật!")
-            return
-        distance_km = input_number("Nhập khoảng cách giao hàng mới (km): ",allow_zero=False,
+        return create_response(
+            status_code=200,
+            message="Lấy chi tiết công việc thành công",
+            data=TaskResponse.model_validate(task).model_dump(),
+            error=None,
+            path=request.url.path
         )
-        cost_per_km = input_number("Nhập đơn giá/km mới: ")
-        package_weight = input_number("Nhập khối lượng kiện hàng mới (kg): ",allow_zero=False,
+
+# API 5: Thêm công việc mới
+@app.post("/tasks")
+def create_new_task(request: Request, payload: TaskCreate, db: Session = Depends(get_db)):
+    try:
+        db_task = task_service.create_task(db, payload)
+    except Exception as exc:
+        db.rollback()
+        return create_response(
+            status_code=500,
+            message="Lỗi hệ thống khi thêm công việc",
+            data=None,
+            error=str(exc),
+            path=request.url.path
         )
-        extra_fee = input_number("Nhập phụ phí mới: ")
-
-        order.update_information(
-            distance_km, cost_per_km, package_weight, extra_fee
+    else:
+        db.commit()
+        db.refresh(db_task)
+        return create_response(
+            status_code=201,
+            message="Thêm công việc thành công",
+            data=TaskResponse.model_validate(db_task).model_dump(),
+            error=None,
+            path=request.url.path
         )
-        print("Cập nhật đơn giao hàng thành công!")
+
+@app.put("/tasks/{task_id}")
+def update_existing_task(request: Request, task_id: int, payload: TaskUpdate, db: Session = Depends(get_db)):
+    try:
+        task = task_service.get_task_by_id(db, task_id)
+        if not task:
+            return create_response(
+                status_code=404,
+                message="Không tìm thấy công việc",
+                data=None,
+                error="Not Found",
+            )
+        db_task = task_service.update_task(db, task, payload)
+    except Exception as exc:
+        db.rollback()
+        return create_response(
+            status_code=500,
+            message="Lỗi hệ thống khi cập nhật công việc",
+            data=None,
+            error=str(exc),
         
-        
-        
-    def delete_order(self):
-        order_id = input_non_empty("Nhập mã đơn giao hàng cần xóa: ")
-        order = self.find_by_id(order_id)
-        if order is None:
-            print("Không tìm thấy đơn giao hàng cần xóa!")
-            return
+        )
+    else:
+        db.commit()
+        db.refresh(db_task)
+        return create_response(
+            status_code=200,
+            message="Cập nhật công việc thành công",
+            data=TaskResponse.model_validate(db_task).model_dump(),
+            error=None,
+        )
 
-        confirmation = input(
-            "Bạn có chắc muốn xóa đơn giao hàng này không? (Y/N): "
-        ).strip().lower()
-        if confirmation == "y":
-            self.orders.remove(order)
-            print("Xóa đơn giao hàng thành công!")
-        elif confirmation == "n":
-            print("Đã hủy thao tác xóa.")
-        else:
-            print("Lựa chọn không hợp lệ!")
-            
-            
-    def search_order(self):
-        keyword = input_non_empty(
-            "Nhập tên khách hàng hoặc địa chỉ cần tìm: "
-        ).lower()
-        results = [
-            order
-            for order in self.orders
-            if keyword in order.customer_name.lower()
-            or keyword in order.delivery_address.lower()
-        ]
-        if not results:
-            print("Không tìm thấy đơn hàng phù hợp!")
-            return
-        self.show_all(results)
-
-def input_non_empty(message):
-    while True:
-        value = input(message).strip()
-        if value:
-            return value
-        print("Thông tin này không được để trống")
-
-def input_number(message, allow_zero=True):
-    while True:
-        try:
-            value = float(input(message))
-            if value < 0:
-                print("Giá trị không được là số âm")
-                continue
-            if value == 0 and not allow_zero:
-                print("Giá trị phải lớn hơn 0")
-                continue
-            return value
-        except ValueError:
-            print("Vui lòng nhập một số hợp lệ!")
-manager = DeliveryOrderManager()
-
-while True:
-    print("\n================ MENU ================")
-    print("1. Hiển thị danh sách đơn giao hàng")
-    print("2. Thêm đơn giao hàng mới")
-    print("3. Cập nhật đơn giao hàng")
-    print("4. Xóa đơn giao hàng")
-    print("5. Tìm kiếm đơn giao hàng")
-    print("6. Thoát")
-    print("======================================")
-    choice = input("Nhập lựa chọn của bạn: ").strip()
-    match choice:
-        case "1":
-            manager.show_all()
-        case "2":
-            manager.add_order()
-        case "3":
-            manager.update_order()
-        case "4":
-            manager.delete_order()
-        case "5":
-            manager.search_order()
-        case "6":
-            print("Cảm ơn bạn đã sử dụng hệ thống quản lý vận chuyển!")
-            break
-        case _:
-            print("Lựa chọn không hợp lệ, vui lòng chọn từ 1 đến 6!")
+@app.delete("/tasks/{task_id}")
+def delete_existing_task(request: Request, task_id: int, db: Session = Depends(get_db)):
+    try:
+        task = task_service.get_task_by_id(db, task_id)
+        if not task:
+            return create_response(
+                status_code=404,
+                message="Không tìm thấy công việc",
+                data=None,
+                error="Not Found",
+               
+            )
+        task_service.delete_task(db, task)
+    except Exception as exc:
+        db.rollback()
+        return create_response(
+            status_code=500,
+            message="Lỗi hệ thống khi xóa công việc",
+            data=None,
+            error=str(exc),
+         
+        )
+    else:
+        db.commit()
+        return create_response(
+            status_code=200,
+            message="Xóa công việc thành công",
+            data=None,
+            error=None,
+          
+        )
