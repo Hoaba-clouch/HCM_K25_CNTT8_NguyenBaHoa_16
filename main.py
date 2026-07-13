@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Depends, Request, Query
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
-
 from database import get_db
 from schema import create_response, TaskCreate, TaskUpdate, TaskResponse
 import task_service
@@ -11,23 +10,6 @@ app = FastAPI(
     description="Hệ thống quản lý công việc trong dự án",
     version="1.0.0"
 )
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    errors = []
-    for err in exc.errors():
-        loc = " -> ".join(str(x) for x in err.get("loc", []))
-        msg = err.get("msg", "Lỗi không xác định")
-        errors.append(f"[{loc}]: {msg}")
-    error_msg = "; ".join(errors)
-    
-    return create_response(
-        status_code=422,
-        message="Dữ liệu đầu vào không hợp lệ",
-        data=None,
-        error=error_msg,
-    )
-
 @app.get("/")
 def check_server(request: Request):
     return create_response(
@@ -35,15 +17,12 @@ def check_server(request: Request):
         message="API đang chạy",
         data=None,
         error=None,
-        path=request.url.path
     )
 
-# API 2: Lấy danh sách công việc
 @app.get("/tasks")
 def get_tasks(request: Request, db: Session = Depends(get_db)):
     try:
         tasks = task_service.get_all_tasks(db)
-        # Chuyển đổi danh sách ORM model sang dict để serialize
         data_list = [TaskResponse.model_validate(t).model_dump() for t in tasks]
     except Exception as exc:
         db.rollback()
@@ -52,7 +31,6 @@ def get_tasks(request: Request, db: Session = Depends(get_db)):
             message="Lỗi hệ thống khi lấy danh sách công việc",
             data=None,
             error=str(exc),
-            path=request.url.path
         )
     else:
         return create_response(
@@ -60,10 +38,9 @@ def get_tasks(request: Request, db: Session = Depends(get_db)):
             message="Lấy danh sách công việc thành công",
             data=data_list,
             error=None,
-            path=request.url.path
         )
 
-# API 3: Tìm kiếm công việc theo trạng thái
+
 @app.get("/tasks/search")
 def search_tasks(
     request: Request, 
@@ -80,7 +57,7 @@ def search_tasks(
             message="Lỗi hệ thống khi tìm kiếm công việc",
             data=None,
             error=str(exc),
-            path=request.url.path
+         
         )
     else:
         return create_response(
@@ -88,10 +65,7 @@ def search_tasks(
             message="Tìm kiếm công việc thành công",
             data=data_list,
             error=None,
-            path=request.url.path
         )
-
-# API 4: Lấy chi tiết công việc
 @app.get("/tasks/{task_id}")
 def get_task_detail(request: Request, task_id: int, db: Session = Depends(get_db)):
     try:
@@ -102,8 +76,8 @@ def get_task_detail(request: Request, task_id: int, db: Session = Depends(get_db
             status_code=500,
             message="Lỗi hệ thống khi lấy chi tiết công việc",
             data=None,
-            error=str(exc),
-            path=request.url.path
+            error=str(exc)
+            
         )
     else:
         if not task:
@@ -111,18 +85,15 @@ def get_task_detail(request: Request, task_id: int, db: Session = Depends(get_db
                 status_code=404,
                 message="Không tìm thấy công việc",
                 data=None,
-                error="Not Found",
-                path=request.url.path
+                error="Not Found"
             )
         return create_response(
             status_code=200,
             message="Lấy chi tiết công việc thành công",
             data=TaskResponse.model_validate(task).model_dump(),
-            error=None,
-            path=request.url.path
+            error=None
         )
 
-# API 5: Thêm công việc mới
 @app.post("/tasks")
 def create_new_task(request: Request, payload: TaskCreate, db: Session = Depends(get_db)):
     try:
@@ -133,8 +104,7 @@ def create_new_task(request: Request, payload: TaskCreate, db: Session = Depends
             status_code=500,
             message="Lỗi hệ thống khi thêm công việc",
             data=None,
-            error=str(exc),
-            path=request.url.path
+            error=str(exc)
         )
     else:
         db.commit()
@@ -143,8 +113,7 @@ def create_new_task(request: Request, payload: TaskCreate, db: Session = Depends
             status_code=201,
             message="Thêm công việc thành công",
             data=TaskResponse.model_validate(db_task).model_dump(),
-            error=None,
-            path=request.url.path
+            error=None
         )
 
 @app.put("/tasks/{task_id}")
@@ -156,7 +125,7 @@ def update_existing_task(request: Request, task_id: int, payload: TaskUpdate, db
                 status_code=404,
                 message="Không tìm thấy công việc",
                 data=None,
-                error="Not Found",
+                error="Not Found"
             )
         db_task = task_service.update_task(db, task, payload)
     except Exception as exc:
@@ -165,8 +134,7 @@ def update_existing_task(request: Request, task_id: int, payload: TaskUpdate, db
             status_code=500,
             message="Lỗi hệ thống khi cập nhật công việc",
             data=None,
-            error=str(exc),
-        
+            error=str(exc)
         )
     else:
         db.commit()
@@ -175,7 +143,7 @@ def update_existing_task(request: Request, task_id: int, payload: TaskUpdate, db
             status_code=200,
             message="Cập nhật công việc thành công",
             data=TaskResponse.model_validate(db_task).model_dump(),
-            error=None,
+            error=None
         )
 
 @app.delete("/tasks/{task_id}")
@@ -187,8 +155,7 @@ def delete_existing_task(request: Request, task_id: int, db: Session = Depends(g
                 status_code=404,
                 message="Không tìm thấy công việc",
                 data=None,
-                error="Not Found",
-               
+                error="Not Found"
             )
         task_service.delete_task(db, task)
     except Exception as exc:
@@ -197,8 +164,7 @@ def delete_existing_task(request: Request, task_id: int, db: Session = Depends(g
             status_code=500,
             message="Lỗi hệ thống khi xóa công việc",
             data=None,
-            error=str(exc),
-         
+            error=str(exc)
         )
     else:
         db.commit()
@@ -206,6 +172,6 @@ def delete_existing_task(request: Request, task_id: int, db: Session = Depends(g
             status_code=200,
             message="Xóa công việc thành công",
             data=None,
-            error=None,
+            error=None
           
         )
